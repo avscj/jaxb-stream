@@ -1,6 +1,7 @@
 package com.chavaillaz.jaxb.stream;
 
 import static org.codehaus.stax2.XMLOutputFactory2.P_AUTOMATIC_EMPTY_ELEMENTS;
+
 import com.ctc.wstx.stax.WstxOutputFactory;
 import com.sun.xml.txw2.output.IndentingXMLStreamWriter;
 import jakarta.xml.bind.JAXBContext;
@@ -18,8 +19,9 @@ import javax.xml.stream.XMLStreamWriter;
 import java.io.Closeable;
 import java.io.OutputStream;
 import java.lang.annotation.Annotation;
-import java.util.HashMap;
-import java.util.Map;
+import java.lang.reflect.Field;
+import java.util.*;
+import java.util.stream.Collectors;
 
 import static jakarta.xml.bind.Marshaller.JAXB_FRAGMENT;
 import static java.lang.Boolean.TRUE;
@@ -44,11 +46,14 @@ import static java.lang.Boolean.TRUE;
  * Don't forget to open the stream before trying to write in it.
  */
 @Slf4j
-public class StreamingMarshaller implements Closeable {
+public class StreamingMarshaller<T> implements Closeable {
 
     private final Map<Class<?>, Marshaller> marshallerCache = new HashMap<>();
+    private final Class<T> type;
     protected final String rootElement;
     protected XMLStreamWriter xmlWriter;
+    private List<String> requiredProperties;
+    private StreamingMarshaller<?> parentMarshaller;
 
     /**
      * Creates a new streaming marshaller writing elements in the given root element class.
@@ -57,8 +62,8 @@ public class StreamingMarshaller implements Closeable {
      * @param type The root class defining the XML container where to store the elements to write
      * @throws IllegalArgumentException if the {@link XmlRootElement} annotation is missing for the given type
      */
-    public StreamingMarshaller(@NonNull Class<?> type) {
-        this.rootElement = getAnnotation(type, XmlRootElement.class).name();
+    public StreamingMarshaller(@NonNull Class<T> type) {
+        this(type, getAnnotation(type, XmlRootElement.class).name());
     }
 
     /**
@@ -67,6 +72,11 @@ public class StreamingMarshaller implements Closeable {
      * @param rootElement The root used as XML container where to store the elements to write
      */
     public StreamingMarshaller(@NonNull String rootElement) {
+        this(null, rootElement);
+    }
+
+    private StreamingMarshaller(Class<T> type, String rootElement) {
+        this.type = type;
         this.rootElement = rootElement;
     }
 
@@ -87,6 +97,10 @@ public class StreamingMarshaller implements Closeable {
      * @throws XMLStreamException if an error was encountered while starting the XML document with the root element
      */
     public synchronized void open(OutputStream outputStream) throws XMLStreamException {
+        open(outputStream, null);
+    }
+
+    public synchronized void open(OutputStream outputStream, String rootElementNamespace) throws XMLStreamException {
         if (xmlWriter != null) {
             close();
         }
@@ -94,7 +108,7 @@ public class StreamingMarshaller implements Closeable {
         WstxOutputFactory wstxOutputFactory = new WstxOutputFactory();
         wstxOutputFactory.setProperty(P_AUTOMATIC_EMPTY_ELEMENTS, true);
         xmlWriter = new IndentingXMLStreamWriter(wstxOutputFactory.createXMLStreamWriter(outputStream, "UTF-8"));
-        createDocumentStart();
+        createDocumentStart(rootElementNamespace);
     }
 
     /**
@@ -103,9 +117,14 @@ public class StreamingMarshaller implements Closeable {
      *
      * @throws XMLStreamException if an error was encountered while starting the XML document with the root element
      */
-    protected void createDocumentStart() throws XMLStreamException {
+    protected void createDocumentStart(String rootElementNamespace) throws XMLStreamException {
         xmlWriter.writeStartDocument();
         xmlWriter.writeStartElement(rootElement);
+        if (rootElementNamespace != null) {
+            xmlWriter.writeDefaultNamespace(rootElementNamespace);
+            // Must undo the namespace so other elements don't have it added. We just want the namespace on the root element.
+            xmlWriter.setDefaultNamespace("");
+        }
     }
 
     /**
@@ -115,10 +134,10 @@ public class StreamingMarshaller implements Closeable {
      *
      * @param type   The type of the given {@code object}
      * @param object The element to marshal and write
-     * @param <T>    The element type
+     * @param <C>    The element type
      * @throws JAXBException if an error was encountered while marshalling the given object
      */
-    public synchronized <T> void write(Class<T> type, T object) throws JAXBException {
+    public synchronized <C> void write(Class<C> type, C object) throws JAXBException {
         XmlRootElement annotation = getAnnotation(type, XmlRootElement.class);
         write(type, annotation.name(), object);
     }
@@ -129,11 +148,35 @@ public class StreamingMarshaller implements Closeable {
      * @param type   The type of the given {@code object}
      * @param name   The tag name of the XML element described in {@link XmlRootElement} or {@link XmlElement}
      * @param object The element to marshal and write
-     * @param <T>    The element type
+     * @param <C>    The element type
      * @throws JAXBException if an error was encountered while marshalling the given object
      */
-    public synchronized <T> void write(Class<T> type, String name, T object) throws JAXBException {
-        JAXBElement<T> element = new JAXBElement<>(QName.valueOf(name), type, object);
+    public synchronized <C> void write(Class<C> type, String name, C object) throws JAXBException {
+        buildRequiredProperties();
+        String xmlName;
+        if (this.type == null) {
+            xmlName = name;
+        } else {
+            Field field;
+            try {
+                field = this.type.getDeclaredField(name);
+            } catch (NoSuchFieldException e) {
+                throw new RuntimeException(e);
+            }
+            XmlElement xmlElement = field.getAnnotation(XmlElement.class);
+            if (xmlElement == null) {
+                xmlName = name;
+            } else {
+                xmlName = xmlElement.name();
+                if ("##default".equals(xmlName)) {
+                    xmlName = name;
+                }
+            }
+            this.requiredProperties.remove(xmlName);
+        }
+
+
+        JAXBElement<C> element = new JAXBElement<>(QName.valueOf(xmlName), type, object);
         getMarshaller(type).marshal(element, xmlWriter);
     }
 
@@ -141,11 +184,11 @@ public class StreamingMarshaller implements Closeable {
      * Gets the marshaller for the given type.
      *
      * @param type The type of elements the marshaller has to handle
-     * @param <T>  The element type
+     * @param <C>  The element type
      * @return The marshaller handling the conversion of the given element type
      * @throws JAXBException if an error was encountered while creating the marshaller
      */
-    public <T> Marshaller getMarshaller(Class<T> type) throws JAXBException {
+    public <C> Marshaller getMarshaller(Class<C> type) throws JAXBException {
         Marshaller marshaller = marshallerCache.get(type);
         if (marshaller == null) {
             marshaller = createMarshaller(type);
@@ -168,6 +211,25 @@ public class StreamingMarshaller implements Closeable {
         return marshaller;
     }
 
+    public synchronized <C> StreamingMarshaller<C> startMarshallingRelatedEntity(Class<C> type, String name)
+            throws XMLStreamException {
+        Field field;
+        try {
+            field = this.type.getDeclaredField(name);
+        } catch (NoSuchFieldException e) {
+            throw new RuntimeException(e);
+        }
+        String xmlName = field.getAnnotation(XmlElement.class).name();
+        if ("##default".equals(xmlName)) {
+            xmlName = name;
+        }
+        StreamingMarshaller<C> childMarshaller = new StreamingMarshaller<>(type, xmlName);
+        childMarshaller.open(this);
+        buildRequiredProperties();
+        this.requiredProperties.remove(name);
+        return childMarshaller;
+    }
+
     /**
      * Writes the closing tag and closes the stream.
      */
@@ -175,15 +237,37 @@ public class StreamingMarshaller implements Closeable {
     public synchronized void close() {
         try {
             if (xmlWriter != null) {
-                xmlWriter.writeCharacters("\n");
-                xmlWriter.writeEndDocument();
-                xmlWriter.close();
+                if (parentMarshaller == null) {
+                    xmlWriter.writeCharacters("\n");
+                    xmlWriter.writeEndDocument();
+                    xmlWriter.close();
+                } else {
+                    xmlWriter.writeEndElement();
+                }
+            }
+            if (this.requiredProperties != null && !this.requiredProperties.isEmpty()) {
+                // TODO - wrap XmlValidationException
+                throw new RuntimeException("Required properties: " + this.requiredProperties + "have not been set");
             }
         } catch (XMLStreamException e) {
             log.error("Unable to close XML stream writer", e);
         } finally {
             xmlWriter = null;
         }
+    }
+
+    private void buildRequiredProperties() {
+        if (requiredProperties == null) {
+            requiredProperties = this.type == null ? Collections.emptyList()  :
+                    Arrays.stream(this.type.getDeclaredFields()).map(Field::getName).collect(Collectors.toList());
+        }
+    }
+
+    private <C> void open(StreamingMarshaller<?> parentMarshaller) throws XMLStreamException {
+        this.parentMarshaller = parentMarshaller;
+        xmlWriter = parentMarshaller.xmlWriter;
+        xmlWriter.writeStartElement(rootElement);
+
     }
 
 }

@@ -8,6 +8,7 @@ import com.sun.management.OperatingSystemMXBean;
 import jakarta.xml.bind.annotation.XmlRootElement;
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
@@ -38,11 +39,21 @@ public class StreamingXsdTest {
                 .ignoringAllOverriddenEquals()
                 .ignoringCollectionOrder()
                 .isEqualTo(readMetrics);
+
     }
 
     private List<Object> writeMetrics(String fileName) throws Exception {
-        try (StreamingMarshaller marshaller = new StreamingMarshaller(Metrics.class)) {
+        try (StreamingMarshaller<Metrics> marshaller = new StreamingMarshaller<>(Metrics.class)) {
             marshaller.open(new FileOutputStream(fileName));
+
+            File root = new File(System.getProperty("user.dir")).toPath().getRoot().toFile();
+
+            DiskType diskType = new DiskType();
+            diskType.setDisk(root.getAbsolutePath());
+            diskType.setFreePartitionSpace(root.getFreeSpace());
+            diskType.setTotalCapacity(root.getTotalSpace());
+            diskType.setUsablePartitionSpace(root.getUsableSpace());
+            marshaller.write(DiskType.class, "disk", diskType);
 
             MemoryType memoryMetric = new MemoryType();
             memoryMetric.setFreeMemory(getRuntime().freeMemory());
@@ -57,7 +68,7 @@ public class StreamingXsdTest {
             processorMetric.setProcessLoad(bean.getProcessCpuLoad());
             marshaller.write(ProcessorType.class, "processor", processorMetric);
 
-            return List.of(memoryMetric, processorMetric);
+            return List.of(diskType, memoryMetric, processorMetric);
         }
     }
 
