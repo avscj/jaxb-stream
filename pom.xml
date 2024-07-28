@@ -110,6 +110,12 @@
             <version>3.24.2</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.easytesting</groupId>
+            <artifactId>fest-assert</artifactId>
+            <version>1.4</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <pluginRepositories>
@@ -152,18 +158,35 @@
                         <goals>
                             <goal>xjc</goal>
                         </goals>
+                        <configuration>
+                            <packageName>com.chavaillaz.jaxb.stream.schema</packageName>
+                            <sources>
+                                <source>src/test/resources/schema.xsd</source>
+                            </sources>
+                            <xjbSources>
+                                <xjbSource>src/test/resources/bindings.xjb</xjbSource>
+                            </xjbSources>
+                            <outputDirectory>target/generated-test-sources/jaxb</outputDirectory>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>xjc-customersandorders</id>
+                        <goals>
+                            <goal>xjc</goal>
+                        </goals>
+                        <configuration>
+                            <packageName>com.chavaillaz.jaxb.stream.schemaorders</packageName>
+                            <sources>
+                                <source>src/test/resources/customersandorders.xsd</source>
+                            </sources>
+                            <xjbSources>
+                                <xjbSource>src/test/resources/bindings-customersandorders.xjb</xjbSource>
+                            </xjbSources>
+                            <outputDirectory>target/generated-test-sources/jaxb</outputDirectory>
+                            <clearOutputDir>false</clearOutputDir>
+                        </configuration>
                     </execution>
                 </executions>
-                <configuration>
-                    <packageName>com.chavaillaz.jaxb.stream.schema</packageName>
-                    <sources>
-                        <source>src/test/resources/schema.xsd</source>
-                    </sources>
-                    <xjbSources>
-                        <xjbSource>src/test/resources/bindings.xjb</xjbSource>
-                    </xjbSources>
-                    <outputDirectory>target/generated-test-sources/jaxb</outputDirectory>
-                </configuration>
             </plugin>
 
             <plugin>

@@ -1,7 +1,5 @@
 package com.chavaillaz.jaxb.stream;
 
-import static org.codehaus.stax2.XMLOutputFactory2.P_AUTOMATIC_EMPTY_ELEMENTS;
-
 import com.ctc.wstx.stax.WstxOutputFactory;
 import com.sun.xml.txw2.output.IndentingXMLStreamWriter;
 import jakarta.xml.bind.JAXBContext;
@@ -25,6 +23,7 @@ import java.util.stream.Collectors;
 
 import static jakarta.xml.bind.Marshaller.JAXB_FRAGMENT;
 import static java.lang.Boolean.TRUE;
+import static org.codehaus.stax2.XMLOutputFactory2.P_AUTOMATIC_EMPTY_ELEMENTS;
 
 /**
  * JAXB marshaller using streaming to write XML into the given output stream.
@@ -172,7 +171,7 @@ public class StreamingMarshaller<T> implements Closeable {
                     xmlName = name;
                 }
             }
-            this.requiredProperties.remove(xmlName);
+            this.requiredProperties.remove(name);
         }
 
 
@@ -246,8 +245,7 @@ public class StreamingMarshaller<T> implements Closeable {
                 }
             }
             if (this.requiredProperties != null && !this.requiredProperties.isEmpty()) {
-                // TODO - wrap XmlValidationException
-                throw new RuntimeException("Required properties: " + this.requiredProperties + "have not been set");
+                throw new IllegalArgumentException("Required properties: " + this.requiredProperties + "have not been set");
             }
         } catch (XMLStreamException e) {
             log.error("Unable to close XML stream writer", e);
@@ -258,12 +256,17 @@ public class StreamingMarshaller<T> implements Closeable {
 
     private void buildRequiredProperties() {
         if (requiredProperties == null) {
-            requiredProperties = this.type == null ? Collections.emptyList()  :
-                    Arrays.stream(this.type.getDeclaredFields()).map(Field::getName).collect(Collectors.toList());
+            requiredProperties = this.type == null ? Collections.emptyList() :
+                    Arrays.stream(this.type.getDeclaredFields())
+                            .filter(f -> {
+                                XmlElement annotation = f.getAnnotation(XmlElement.class);
+                                return annotation != null && annotation.required();
+                            })
+                            .map(Field::getName).collect(Collectors.toList());
         }
     }
 
-    private <C> void open(StreamingMarshaller<?> parentMarshaller) throws XMLStreamException {
+    private void open(StreamingMarshaller<?> parentMarshaller) throws XMLStreamException {
         this.parentMarshaller = parentMarshaller;
         xmlWriter = parentMarshaller.xmlWriter;
         xmlWriter.writeStartElement(rootElement);
